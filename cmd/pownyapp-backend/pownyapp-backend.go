@@ -64,9 +64,9 @@ type Message struct {
 	Severity          string `json:"severity"`
 	Subject           string `json:"subject"`
 	Details           string `json:"details"`
-	TimeKafka         int64  `json:"time_kafka"`
-	TimeMobileBackend int64  `json:"time_mobile_backend"`
-	TimeMobileApp     *int64 `json:"time_mobile_app"`
+	TimeKafka         int64  `json:"time_kafka" bson:"time_kafka"`
+	TimeMobileBackend int64  `json:"time_mobile_backend" bson:"time_mobile_backend"`
+	TimeMobileApp     *int64 `json:"time_mobile_app" bson:"time_mobile_app"`
 
 	Recipient string `json:"-"`
 }
@@ -121,8 +121,28 @@ func (s *Server) getMessages(login string) ([]Message, error) {
 	err = sess.DB("").C("messages").Find(bson.M{
 		"recipient":       login,
 		"time_mobile_app": bson.M{"$ne": nil},
-	}).Sort("-timemobilebackend").All(&messages)
+	}).Sort("-time_mobile_backend").All(&messages)
 	return messages, err
+}
+
+func (s *Server) deleteMessagesBySubject(login string, subject string) error {
+	sess := s.mongoSession.Copy()
+	defer sess.Close()
+
+	return sess.DB("").C("messages").Remove(bson.M{
+		"recipient": login,
+		"subject":   subject,
+	})
+}
+
+func (s *Server) deleteMessagesByID(login string, id string) error {
+	sess := s.mongoSession.Copy()
+	defer sess.Close()
+
+	return sess.DB("").C("messages").Remove(bson.M{
+		"recipient": login,
+		"id":        id,
+	})
 }
 
 func (s *Server) setIOSToken(login string, token string) error {
@@ -205,15 +225,16 @@ func (s *Server) PutMessageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	err := json.NewDecoder(r.Body).Decode(&v)
 	if err != nil {
-		writeError(w, 400, "Bad JSON: "+err.Error())
+		writeError(w, 400, "bad JSON: "+err.Error())
 		return
 	}
 
 	if v.Message.Type != "juggler" {
-		writeError(w, 400, "Message type should be juggler.")
+		writeError(w, 400, "message type should be juggler")
 		return
 	}
 
+	log.Printf("put: %+v", v)
 	msg := Message{
 		ID:       v.Message.ID,
 		Severity: v.Message.Data.Message.Status,
@@ -225,25 +246,25 @@ func (s *Server) PutMessageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if v.Recipient == "" {
-		writeError(w, 400, "Expected non-empty recipient.")
+		writeError(w, 400, "expected non-empty recipient")
 		return
 	}
 	if msg.Severity == "" {
-		writeError(w, 400, "Expected non-empty message.data.message.status.")
+		writeError(w, 400, "expected non-empty message.data.message.status")
 		return
 	}
 	if msg.Severity != "OK" && msg.Severity != "WARN" && msg.Severity != "CRIT" {
-		writeError(w, 400, "Message status should be OK, WARN or CRIT.")
+		writeError(w, 400, "message status should be OK, WARN or CRIT")
 		return
 	}
 	if msg.Subject == "" {
-		writeError(w, 400, "Expected non-empty subject.")
+		writeError(w, 400, "expected non-empty subject")
 		return
 	}
 
 	err = s.putMessage(v.Recipient, msg)
 	if err != nil {
-		writeError(w, 500, "Failed to save message: "+err.Error())
+		writeError(w, 500, "failed to save message: "+err.Error())
 		return
 	}
 
@@ -258,13 +279,13 @@ func (s *Server) PutMessageHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) GetMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	login, err := getYandexLogin(r)
 	if login == "" || err != nil {
-		writeError(w, 401, "Unauthorized.")
+		writeError(w, 401, "unauthorized")
 		return
 	}
 
 	messages, err := s.getMessages(login)
 	if err != nil {
-		writeError(w, 500, "Failed to get messages: "+err.Error())
+		writeError(w, 500, "failed to get messages: "+err.Error())
 		return
 	}
 
@@ -277,23 +298,53 @@ func (s *Server) GetMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) DeleteMessageHandler(w http.ResponseWriter, r *http.Request) {
+	login, err := getYandexLogin(r)
+	if login == "" || err != nil {
+		writeError(w, 403, "forbidden")
+		return
+	}
+
+	subject := r.FormValue("subject")
+	if subject != "" {
+		err = s.deleteMessagesBySubject(login, subject)
+		if err != nil {
+			writeError(w, 500, "failed to delete message: "+err.Error())
+			return
+		}
+	}
+
+	id := r.FormValue("id")
+	if id != "" {
+		err = s.deleteMessagesByID(login, id)
+		if err != nil {
+			writeError(w, 500, "failed to delete message: "+err.Error())
+			return
+		}
+	}
+
+	writeResponse(w, 200, map[string]interface{}{
+		"status": "success",
+	})
+}
+
 func (s *Server) RegisterIOSTokenHandler(w http.ResponseWriter, r *http.Request) {
 	login, err := getYandexLogin(r)
 	if login == "" || err != nil {
-		writeError(w, 401, "Unauthorized.")
+		writeError(w, 403, "forbidden")
 		return
 	}
 
 	log.Println(*r)
 	token := r.FormValue("token")
 	if token == "" {
-		writeError(w, 400, "Expected non-empty token.")
+		writeError(w, 400, "expected non-empty token")
 		return
 	}
 
 	err = s.setIOSToken(login, token)
 	if err != nil {
-		writeError(w, 500, "Failed to set iOS token: "+err.Error())
+		writeError(w, 500, "failed to set iOS token: "+err.Error())
 		return
 	}
 
@@ -356,7 +407,7 @@ func main() {
 			server.RegisterIOSTokenHandler(w, r)
 			return
 		}
-		writeError(w, 405, "Method not allowed.")
+		writeError(w, 405, "method not allowed")
 	})
 	http.HandleFunc("/powny/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/powny/" {
@@ -371,7 +422,11 @@ func main() {
 			server.PutMessageHandler(w, r)
 			return
 		}
-		writeError(w, 405, "Method not allowed.")
+		if r.Method == "DELETE" {
+			server.DeleteMessageHandler(w, r)
+			return
+		}
+		writeError(w, 405, "method not allowed")
 	})
 	log.Fatal(http.ListenAndServe(":5000", nil))
 }
