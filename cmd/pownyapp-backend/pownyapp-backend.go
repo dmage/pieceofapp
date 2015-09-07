@@ -129,20 +129,22 @@ func (s *Server) deleteMessagesBySubject(login string, subject string) error {
 	sess := s.mongoSession.Copy()
 	defer sess.Close()
 
-	return sess.DB("").C("messages").Remove(bson.M{
+	_, err := sess.DB("").C("messages").RemoveAll(bson.M{
 		"recipient": login,
 		"subject":   subject,
 	})
+	return err
 }
 
 func (s *Server) deleteMessagesByID(login string, id string) error {
 	sess := s.mongoSession.Copy()
 	defer sess.Close()
 
-	return sess.DB("").C("messages").Remove(bson.M{
+	_, err := sess.DB("").C("messages").RemoveAll(bson.M{
 		"recipient": login,
 		"id":        id,
 	})
+	return err
 }
 
 func (s *Server) setIOSToken(login string, token string) error {
@@ -307,6 +309,7 @@ func (s *Server) DeleteMessageHandler(w http.ResponseWriter, r *http.Request) {
 
 	subject := r.FormValue("subject")
 	if subject != "" {
+		log.Printf("DELETE login=%s subject=%s", login, subject)
 		err = s.deleteMessagesBySubject(login, subject)
 		if err != nil {
 			writeError(w, 500, "failed to delete message: "+err.Error())
@@ -316,6 +319,7 @@ func (s *Server) DeleteMessageHandler(w http.ResponseWriter, r *http.Request) {
 
 	id := r.FormValue("id")
 	if id != "" {
+		log.Printf("DELETE login=%s id=%s", login, id)
 		err = s.deleteMessagesByID(login, id)
 		if err != nil {
 			writeError(w, 500, "failed to delete message: "+err.Error())
